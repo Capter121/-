@@ -1,0 +1,196 @@
+import streamlit as st
+import pandas as pd
+import os
+from datetime import date
+import hashlib
+import plotly.express as px
+
+# --- 1. 基础配置与文件初始化 ---
+# 设置页面标题和图标
+st.set_page_config(page_title="篮球球员管理系统", page_icon="🏀", layout="wide")
+
+USER_DATA_PATH = "players_info.csv"
+STATS_DATA_PATH = "players_stats.csv"
+
+# 初始化数据存储文件
+if not os.path.exists(USER_DATA_PATH):
+    pd.DataFrame(columns=["姓名", "密码", "身高", "体重", "位置"]).to_csv(USER_DATA_PATH, index=False)
+if not os.path.exists(STATS_DATA_PATH):
+    pd.DataFrame(columns=["姓名", "日期", "进球", "篮板", "抢断", "盖帽"]).to_csv(STATS_DATA_PATH, index=False)
+
+# 密码加密处理
+def make_hashes(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def check_hashes(password, hashed_text):
+    return make_hashes(password) == hashed_text
+
+# --- 2. 会话状态管理 (登录状态) ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+    st.session_state['username'] = ""
+
+# --- 3. 侧边栏：身份验证 ---
+st.sidebar.title("🔐 球员通道")
+if not st.session_state['logged_in']:
+    auth_mode = st.sidebar.radio("选择操作", ["登录系统", "注册新球员"])
+    input_user = st.sidebar.text_input("姓名", placeholder="请输入真实姓名")
+    input_pw = st.sidebar.text_input("密码", type='password')
+    
+    if auth_mode == "登录系统":
+        if st.sidebar.button("立即登录", use_container_width=True):
+            df_u = pd.read_csv(USER_DATA_PATH)
+            user_record = df_u[df_u['姓名'] == input_user]
+            if not user_record.empty and check_hashes(input_pw, user_record.iloc[0]['密码']):
+                st.session_state['logged_in'] = True
+                st.session_state['username'] = input_user
+                st.rerun()
+            else:
+                st.sidebar.error("❌ 姓名或密码不匹配")
+    else:
+        if st.sidebar.button("完成注册", use_container_width=True):
+            df_u = pd.read_csv(USER_DATA_PATH)
+            if input_user in df_u['姓名'].values:
+                st.sidebar.warning("⚠️ 该姓名已被注册")
+            elif not input_user or not input_pw:
+                st.sidebar.error("⚠️ 姓名和密码不能为空")
+            else:
+                new_row = pd.DataFrame([[input_user, make_hashes(input_pw), 180, 75, "SF"]], columns=df_u.columns)
+                pd.concat([df_u, new_row], ignore_index=True).to_csv(USER_DATA_PATH, index=False)
+                st.sidebar.success("✅ 注册成功！请切换到登录模式")
+else:
+    st.sidebar.info(f"当前在线: **{st.session_state['username']}**")
+    if st.sidebar.button("退出系统", use_container_width=True):
+        st.session_state['logged_in'] = False
+        st.session_state['username'] = ""
+        st.rerun()
+
+# --- 4. 主界面逻辑 ---
+if not st.session_state['logged_in']:
+    st.title("🏀 业余篮球联盟数据管理系统")
+    st.markdown("""
+    ### 欢迎来到联盟后台！
+    在这里你可以：
+    * **查看** 任何一位队友的身高、位置和历史战绩。
+    * **录入** 你每场比赛的进球、篮板、抢断和盖帽。
+    * **管理** 自己的体测数据。
+    
+    **请先在左侧侧边栏完成登录。**
+    """)
+    st.image("https://images.unsplash.com/photo-1546519638-68e109498ffc?q=80&w=2090&auto=format&fit=crop", caption="无篮球，不兄弟")
+
+else:
+    # 顶部导航标签页
+    tab1, tab2, tab3 = st.tabs(["📊 联盟数据大屏", "✍️ 个人战绩录入", "⚙️ 我的资料设置"])
+
+    # --- TAB 1: 联盟大屏（公开查看） ---
+    with tab1:
+        st.subheader("联盟球员动态与查询")
+        df_p = pd.read_csv(USER_DATA_PATH)
+        df_s = pd.read_csv(STATS_DATA_PATH)
+        
+        # 1.1 全员概览（排行榜）
+        with st.expander("🏆 查看联盟得分榜"):
+            if not df_s.empty:
+                leaderboard = df_s.groupby('姓名')[['进球', '篮板', '抢断', '盖帽']].sum().sort_values(by='进球', ascending=False)
+                st.table(leaderboard)
+            else:
+                st.write("暂无比赛记录")
+
+        st.divider()
+
+        # 1.2 个人档案详细查询 (可查任何人)
+        search_name = st.selectbox("🔍 选择要查询的球员", df_p['姓名'].tolist())
+        
+        p_info = df_p[df_p['姓名'] == search_name].iloc[0]
+        p_stats = df_s[df_s['姓名'] == search_name]
+
+        # 展示基本体测
+        c1, c2, c3 = st.columns(3)
+        c1.metric("身高 (cm)", p_info['身高'])
+        c2.metric("体重 (kg)", p_info['体重'])
+        c3.metric("擅长位置", p_info['位置'])
+
+        # 展示统计数据
+        st.write(f"### {search_name} 的生涯总计")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("总进球", p_stats['进球'].sum())
+        m2.metric("总篮板", p_stats['篮板'].sum())
+        m3.metric("总抢断", p_stats['抢断'].sum())
+        m4.metric("总盖帽", p_stats['盖帽'].sum())
+
+        # 趋势图
+        if not p_stats.empty:
+            p_stats['日期'] = pd.to_datetime(p_stats['日期'])
+            fig = px.line(p_stats.sort_values('日期'), x='日期', y='进球', title=f"{search_name} 进球趋势图")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.write("#### 📅 详细战绩表")
+            st.dataframe(p_stats.sort_values(by="日期", ascending=False), use_container_width=True)
+            
+            # --- 权限判断：只有本人能删除自己的数据 ---
+            if search_name == st.session_state['username']:
+                st.warning("您正在查看自己的记录，如有录入错误可在此删除：")
+                del_date = st.date_input("选择记录日期", value=date.today(), key="del_date")
+                if st.button("确认删除该日战绩"):
+                    df_s = df_s[~((df_s['姓名'] == search_name) & (df_s['日期'] == str(del_date)))]
+                    df_s.to_csv(STATS_DATA_PATH, index=False)
+                    st.success("数据已删除！")
+                    st.rerun()
+        else:
+            st.info(f"{search_name} 还没有录入任何比赛数据。")
+
+    # --- TAB 2: 个人战绩录入（限本人） ---
+    with tab2:
+        st.subheader("📝 录入新比赛战绩")
+        st.info(f"当前身份：**{st.session_state['username']}** (您的数据将存入个人档案)")
+        
+        with st.form("stat_form"):
+            entry_date = st.date_input("比赛日期", date.today())
+            col_a, col_b = st.columns(2)
+            g = col_a.number_input("进球 (Goals)", min_value=0, step=1)
+            r = col_b.number_input("篮板 (Rebounds)", min_value=0, step=1)
+            s = col_a.number_input("抢断 (Steals)", min_value=0, step=1)
+            b = col_b.number_input("盖帽 (Blocks)", min_value=0, step=1)
+            
+            submit = st.form_submit_button("保存数据到云端", use_container_width=True)
+            
+            if submit:
+                df_s = pd.read_csv(STATS_DATA_PATH)
+                new_entry = pd.DataFrame([[st.session_state['username'], entry_date, g, r, s, b]], columns=df_s.columns)
+                pd.concat([df_s, new_entry], ignore_index=True).to_csv(STATS_DATA_PATH, index=False)
+                st.success("🎉 数据录入成功！")
+
+    # --- TAB 3: 个人资料设置（限本人） ---
+    with tab3:
+        st.subheader("⚙️ 个人体测资料修改")
+        df_p = pd.read_csv(USER_DATA_PATH)
+        idx = df_p[df_p['姓名'] == st.session_state['username']].index[0]
+        
+        with st.form("profile_form"):
+            new_h = st.number_input("更新身高 (cm)", 140, 230, int(df_p.at[idx, '身高']))
+            new_w = st.number_input("更新体重 (kg)", 40, 150, int(df_p.at[idx, '体重']))
+            new_p = st.selectbox("球场位置", ["PG", "SG", "SF", "PF", "C"], 
+                                 index=["PG", "SG", "SF", "PF", "C"].index(df_p.at[idx, '位置']))
+            
+            save_profile = st.form_submit_button("保存修改", use_container_width=True)
+            if save_profile:
+                df_p.at[idx, '身高'] = new_h
+                df_p.at[idx, '体重'] = new_w
+                df_p.at[idx, '位置'] = new_p
+                df_p.to_csv(USER_DATA_PATH, index=False)
+                st.success("✅ 个人资料已同步更新！")
+        # 添加头像上传组件
+        uploaded_avatar = st.file_uploader("更换个人头像", type=["jpg", "png", "jpeg"])
+        if uploaded_avatar:
+            # 将头像保存到本地文件夹
+            if not os.path.exists("avatars"):
+                os.makedirs("avatars")
+            avatar_path = f"avatars/{st.session_state['username']}.png"
+            with open(avatar_path, "wb") as f:
+                f.write(uploaded_avatar.getbuffer())
+            st.success("头像上传成功！")        
+
+# 底部说明
+st.markdown("---")
+st.caption("🏀 业余篮球联盟数据系统 v1.0 | 仅供队友内部交流使用")
